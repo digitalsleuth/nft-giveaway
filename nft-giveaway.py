@@ -4,11 +4,14 @@ This script is for parsing ETH wallet addresses from
 Reddit comments and Tweets for delivery of NFT's
 """
 
+import os
 import sys
 import re
 import argparse
+from datetime import datetime as dt
 import praw
 from TwitterAPI import TwitterAPI, TwitterRequestError, TwitterConnectionError, TwitterPager
+
 
 try:
     from keys import *
@@ -18,7 +21,7 @@ except:
     raise SystemExit(0)
 
 
-__version__ = '0.0.3'
+__version__ = '0.0.4'
 __author__ = 'Corey Forman - @digitalsleuth'
 __date__ = '27 JUL 2022'
 
@@ -62,12 +65,14 @@ class TreeNode:
         conv_id = []
         child_id = []
         text = []
+        author_id = []
         for child in self.children:
             conv_id.append(self.data['id'])
             child_id.append(child.data['id'])
             text.append(child.data['text'])
-        #return conv_id, child_id, text
-        return text
+            author_id.append(child.data['author_id'])
+        return conv_id, child_id, text, author_id
+        #return text
 
 def parse_reddit_comments(url, subreddit, output):
     """Reads through all comments and grabs wallet addresses"""
@@ -106,7 +111,7 @@ def parse_reddit_comments(url, subreddit, output):
             output_file.write(f'{each_address}\n')
     output_file.close()
 
-def parse_tweet_comments(msgid, output):
+def parse_tweet_comments(msgid, output, grab_wallet, grab_name):
     """
     Reads through all replies to the given Tweet
     and grabs wallet addresses
@@ -139,14 +144,13 @@ def parse_tweet_comments(msgid, output):
                               'tweet.fields': 'author_id,conversation_id,created_at,in_reply_to_user_id'
                              })
         orphans = []
-        addresses = []
         for each_item in pager.get_iterator(wait=1):
             node = TreeNode(each_item)
             orphans = [orphan for orphan in orphans if not node.find_parent_of(orphan)]
             if not root.find_parent_of(node):
                 orphans.append(node)
 
-        replies = root.list_l1()
+        _, _, replies, author_ids = root.list_l1()
 
     except TwitterRequestError as exc_msg:
         print(f'[!] {exc_msg.status_code}')
@@ -162,6 +166,36 @@ def parse_tweet_comments(msgid, output):
         print(f'[!] {exc_msg}')
         raise SystemExit(2)
 
+    if grab_wallet:
+        de_dup = grab_wallets(replies)
+    
+    elif grab_name:
+        de_dup = grab_names(author_ids)
+
+    if os.path.exists(output):
+        response = input(f'[WARNING] {output} already exists - overwrite? [Y/n] ')
+        while response not in ['Y', 'N', 'y', 'n', '']:
+            response = input(f'[WARNING] {output} already exists - overwrite? [Y/n] ')
+        if response in ['Y', 'y', '']:
+            with open(output, 'w') as output_file:
+                for each_line in de_dup:
+                    output_file.write(f'{each_line}\n')
+            output_file.close()
+        elif response in ['N', 'n']:
+            output = f'{output}_{int(dt.timestamp(dt.now()))}'
+            with open(output, 'w') as output_file:
+                for each_line in de_dup:
+                    output_file.write(f'{each_line}\n')
+            output_file.close()
+    else:
+        with open(output, 'a') as output_file:
+            for each_line in de_dup:
+                output_file.write(f'{each_line}\n')
+        output_file.close()
+
+def grab_wallets(replies):
+    """Grabs Wallet Addresses from Replies"""
+    addresses = []
     for reply in replies:
         raw = re.search(raw_wallet_regex, reply)
         ens = re.search(ens_wallet_regex, reply)
@@ -171,13 +205,24 @@ def parse_tweet_comments(msgid, output):
             addresses.append((ens.group()).lower())
         elif ens and raw:
             addresses.append((ens.group()).lower())
-
     de_dup = sorted(set(addresses))
-    with open(output, 'w') as output_file:
-        for each_address in de_dup:
-            output_file.write(f'{each_address}\n')
-    output_file.close()
 
+    return de_dup
+
+def grab_names(author_ids):
+    """Resolves Usernames from Author IDs"""
+    usernames = []
+    twapi = TwitterAPI(t_api_key,
+                       t_api_key_secret,
+                       t_access_token,
+                       t_access_token_secret,
+                       api_version='2')
+    for auth_id in author_ids:
+        name = twapi.request(f'users/:{auth_id}').json()['data']['username']
+        usernames.append(name)
+    de_dup = sorted(set(usernames))
+
+    return de_dup
 
 def main():
     """Parse all passed arguments"""
@@ -186,6 +231,8 @@ def main():
     arg_parse.add_argument('-s', '--subreddit', help='subreddit to parse')
     arg_parse.add_argument('-t', '--tweet', help='tweet 19-digit ID')
     arg_parse.add_argument('-u', '--url', help='short URL for the reddit thread')
+    arg_parse.add_argument('-n', '--name', help='grab usernames: Twitter Only', action='store_true')
+    arg_parse.add_argument('-w', '--wallet', help='grab wallets: Twitter Only', action='store_true')
     arg_parse.add_argument('-o', '--output', help='choice in output file', required=True)
     arg_parse.add_argument('-v', '--version', action='version', version=arg_parse.description)
 
@@ -200,7 +247,7 @@ def main():
         print("Parsing Reddit Thread requires the short URL for the thread")
         raise SystemExit(0)
     elif args.tweet:
-        parse_tweet_comments(args.tweet, args.output)
+        parse_tweet_comments(args.tweet, args.output, args.wallet, args.name)
     elif (len(sys.argv[1:]) > 0) and not (args.subreddit or args.tweet):
         print("Please choose a valid option.")
         raise SystemExit(0)
