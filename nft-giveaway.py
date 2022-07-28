@@ -8,26 +8,18 @@ import os
 import sys
 import re
 import argparse
+import configparser
 from datetime import datetime as dt
 import praw
 from TwitterAPI import TwitterAPI, TwitterRequestError, TwitterConnectionError, TwitterPager
 
 
-try:
-    from keys import *
-except:
-    print("[!] Create a keys.py file with the required API "
-          "keys in the same directory as the script!")
-    raise SystemExit(0)
-
-
-__version__ = '0.0.4'
+__version__ = '0.0.5'
 __author__ = 'Corey Forman - @digitalsleuth'
 __date__ = '27 JUL 2022'
 
 raw_wallet_regex = re.compile("0x.{40}")
 ens_wallet_regex = re.compile("\w+\.?\w+\.eth")
-
 
 class TreeNode:
     """Extracts required values from returned data object"""
@@ -72,63 +64,61 @@ class TreeNode:
             text.append(child.data['text'])
             author_id.append(child.data['author_id'])
         return conv_id, child_id, text, author_id
-        #return text
 
-def parse_reddit_comments(url, subreddit, output):
+def parse_reddit_comments(url, subreddit, output, config):
     """Reads through all comments and grabs wallet addresses"""
+
+    post_comments = []
+    load_config = configparser.ConfigParser()
+    load_config.read(config)
+    client_id = load_config['REDDIT']['client_id']
+    client_secret = load_config['REDDIT']['client_secret']
+    u_agent = load_config['GENERAL']['u_agent']
     try:
-        if '' in {r_client_id, r_client_secret}:
+        if '' in {client_id, client_secret, u_agent}:
             print("[!] One of your API values is missing! "
-                  "Please check your keys.py file and try again.")
+                  "Please check your config file and try again.")
             raise SystemExit(2)
     except:
         pass
-    addresses = []
-    post_comments = []
-    u_agent = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:102.0) Gecko/20100101 Firefox/102.0"
     post = f'https://www.reddit.com/r/{subreddit}/comments/{url}'
-    reddit_ro = praw.Reddit(client_id=r_client_id,
-                            client_secret=r_client_secret,
+    reddit_ro = praw.Reddit(client_id=client_id,
+                            client_secret=client_secret,
                             user_agent=u_agent)
     submission = reddit_ro.submission(url=post)
     submission.comments.replace_more(limit=None)
     for comment in submission.comments.list():
         post_comments.append(comment.body)
 
-    for comment in post_comments:
-        raw = re.search(raw_wallet_regex, comment)
-        ens = re.search(ens_wallet_regex, comment)
-        if raw and not ens:
-            addresses.append((raw.group()).lower())
-        elif ens and not raw:
-            addresses.append((ens.group()).lower())
-        elif ens and raw:
-            addresses.append((ens.group()).lower())
+    de_dup = grab_wallets(post_comments)
 
-    de_dup = sorted(set(addresses))
     with open(output, 'w') as output_file:
-        for each_address in de_dup:
-            output_file.write(f'{each_address}\n')
+        for each_line in de_dup:
+            output_file.write(f'{each_line}\n')
     output_file.close()
 
-def parse_tweet_comments(msgid, output, grab_wallet, grab_name):
-    """
-    Reads through all replies to the given Tweet
-    and grabs wallet addresses
-    """
+def parse_tweet_comments(msgid, output, grab_wallet, grab_name, config):
+    """Reads through all replies to the given Tweet and grabs wallet addresses"""
+
+    load_config = configparser.ConfigParser()
+    load_config.read(config)
+    api_key = load_config['TWITTER']['api_key']
+    api_key_secret = load_config['TWITTER']['api_key_secret']
+    access_token = load_config['TWITTER']['access_token']
+    access_token_secret = load_config['TWITTER']['access_token_secret']
     try:
-        if '' in {t_api_key, t_api_key_secret, t_access_token, t_access_token_secret}:
+        if '' in {api_key, api_key_secret, access_token, access_token_secret}:
             print("[!] One of your API values is missing! "
-                  "Please check your keys.py file and try again.")
+                  "Please check your config file and try again.")
             raise SystemExit(2)
     except:
         pass
     try:
         replies = []
-        twapi = TwitterAPI(t_api_key,
-                           t_api_key_secret,
-                           t_access_token,
-                           t_access_token_secret,
+        twapi = TwitterAPI(api_key,
+                           api_key_secret,
+                           access_token,
+                           access_token_secret,
                            api_version='2')
         json_resp = twapi.request(f'tweets/:{msgid}', {'tweet.fields': 'conversation_id'}).json()
         convo_id = json_resp.get('data')['conversation_id']
@@ -168,9 +158,10 @@ def parse_tweet_comments(msgid, output, grab_wallet, grab_name):
 
     if grab_wallet:
         de_dup = grab_wallets(replies)
-    
     elif grab_name:
-        de_dup = grab_names(author_ids)
+        de_dup = grab_names(author_ids, config)
+    else:
+        de_dup = grab_wallets(replies)
 
     if os.path.exists(output):
         response = input(f'[WARNING] {output} already exists - overwrite? [Y/n] ')
@@ -209,14 +200,16 @@ def grab_wallets(replies):
 
     return de_dup
 
-def grab_names(author_ids):
+def grab_names(author_ids, config):
     """Resolves Usernames from Author IDs"""
+    load_config = configparser.ConfigParser()
+    load_config.read(config)
+    api_key = load_config['TWITTER']['api_key']
+    api_key_secret = load_config['TWITTER']['api_key_secret']
+    access_token = load_config['TWITTER']['access_token']
+    access_token_secret = load_config['TWITTER']['access_token_secret']
     usernames = []
-    twapi = TwitterAPI(t_api_key,
-                       t_api_key_secret,
-                       t_access_token,
-                       t_access_token_secret,
-                       api_version='2')
+    twapi = TwitterAPI(api_key, api_key_secret, access_token, access_token_secret, api_version='2')
     for auth_id in author_ids:
         name = twapi.request(f'users/:{auth_id}').json()['data']['username']
         usernames.append(name)
@@ -228,6 +221,7 @@ def main():
     """Parse all passed arguments"""
     arg_parse = argparse.ArgumentParser(description=f"Python 3 Reddit Wallet Address parser"
                                                     f" v{__version__}")
+    arg_parse.add_argument('-c', '--config', help='config file containing API keys', required=True)
     arg_parse.add_argument('-s', '--subreddit', help='subreddit to parse')
     arg_parse.add_argument('-t', '--tweet', help='tweet 19-digit ID')
     arg_parse.add_argument('-u', '--url', help='short URL for the reddit thread')
@@ -241,13 +235,17 @@ def main():
         arg_parse.exit()
 
     args = arg_parse.parse_args()
+
+    if not args.config:
+        print("[!] Config file containing API keys is required!")
+        raise SystemExit(0)
     if args.subreddit:
-        parse_reddit_comments(args.url, args.subreddit, args.output)
+        parse_reddit_comments(args.url, args.subreddit, args.output, args.config)
     elif args.subreddit and not args.url:
         print("Parsing Reddit Thread requires the short URL for the thread")
         raise SystemExit(0)
     elif args.tweet:
-        parse_tweet_comments(args.tweet, args.output, args.wallet, args.name)
+        parse_tweet_comments(args.tweet, args.output, args.wallet, args.name, args.config)
     elif (len(sys.argv[1:]) > 0) and not (args.subreddit or args.tweet):
         print("Please choose a valid option.")
         raise SystemExit(0)
