@@ -14,9 +14,9 @@ import praw
 from TwitterAPI import TwitterAPI, TwitterRequestError, TwitterConnectionError, TwitterPager
 
 
-__version__ = '0.0.5'
+__version__ = '1.0.0'
 __author__ = 'Corey Forman - @digitalsleuth'
-__date__ = '27 JUL 2022'
+__date__ = '17 AUG 2022'
 
 raw_wallet_regex = re.compile("0x.{40}")
 ens_wallet_regex = re.compile("\w+\.?\w+\.eth")
@@ -71,9 +71,9 @@ def parse_reddit_comments(url, subreddit, output, config):
     post_comments = []
     load_config = configparser.ConfigParser()
     load_config.read(config)
-    client_id = load_config['REDDIT']['client_id']
-    client_secret = load_config['REDDIT']['client_secret']
-    u_agent = load_config['GENERAL']['u_agent']
+    client_id = load_config['REDDIT']['client_id'].strip('"')
+    client_secret = load_config['REDDIT']['client_secret'].strip('"')
+    u_agent = load_config['GENERAL']['u_agent'].strip('"')
     try:
         if '' in {client_id, client_secret, u_agent}:
             print("[!] One of your API values is missing! "
@@ -102,10 +102,10 @@ def parse_tweet_comments(msgid, output, grab_wallet, grab_name, config):
 
     load_config = configparser.ConfigParser()
     load_config.read(config)
-    api_key = load_config['TWITTER']['api_key']
-    api_key_secret = load_config['TWITTER']['api_key_secret']
-    access_token = load_config['TWITTER']['access_token']
-    access_token_secret = load_config['TWITTER']['access_token_secret']
+    api_key = load_config['TWITTER']['api_key'].strip('"')
+    api_key_secret = load_config['TWITTER']['api_key_secret'].strip('"')
+    access_token = load_config['TWITTER']['access_token'].strip('"')
+    access_token_secret = load_config['TWITTER']['access_token_secret'].strip('"')
     try:
         if '' in {api_key, api_key_secret, access_token, access_token_secret}:
             print("[!] One of your API values is missing! "
@@ -204,10 +204,10 @@ def grab_names(author_ids, config):
     """Resolves Usernames from Author IDs"""
     load_config = configparser.ConfigParser()
     load_config.read(config)
-    api_key = load_config['TWITTER']['api_key']
-    api_key_secret = load_config['TWITTER']['api_key_secret']
-    access_token = load_config['TWITTER']['access_token']
-    access_token_secret = load_config['TWITTER']['access_token_secret']
+    api_key = load_config['TWITTER']['api_key'].strip('"')
+    api_key_secret = load_config['TWITTER']['api_key_secret'].strip('"')
+    access_token = load_config['TWITTER']['access_token'].strip('"')
+    access_token_secret = load_config['TWITTER']['access_token_secret'].strip('"')
     usernames = []
     twapi = TwitterAPI(api_key, api_key_secret, access_token, access_token_secret, api_version='2')
     for auth_id in author_ids:
