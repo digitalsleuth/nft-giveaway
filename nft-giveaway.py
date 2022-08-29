@@ -20,7 +20,7 @@ import praw
 from TwitterAPI import TwitterAPI, TwitterRequestError, TwitterConnectionError, TwitterPager
 
 
-__version__ = '1.0.0'
+__version__ = '1.0.1'
 __author__ = 'Corey Forman - @digitalsleuth'
 __date__ = '29 AUG 2022'
 
@@ -113,10 +113,11 @@ def query_nft_data(minter_id, token_address, nft_id, config):
 
 def query_nft_holders(nft_data, config):
     """Returns a json-formatted output of holders of the identified NFT"""
-    payload = {'nftData': nft_data, 'limit': 200}
     load_config = configparser.ConfigParser()
     load_config.read(config)
     API_KEY = load_config['LOOPRING']['api_key']
+    API_LIMIT = load_config['LOOPRING']['api_limit']
+    payload = {'nftData': nft_data, 'limit': API_LIMIT}
     HEADERS = {'X-API-KEY': API_KEY}
     api_request = requests.get(LoopringApi.NFT_HOLDERS, params=payload, headers=HEADERS)
     api_response = json.loads(api_request.text)
