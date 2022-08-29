@@ -2,6 +2,10 @@
 """
 This script is for parsing ETH wallet addresses from
 Reddit comments and Tweets for delivery of NFT's
+
+Additionally, it can be used to query the holders of
+a specific NFT, identified by the URL from a Loopring
+Explorer page displaying the NFT.
 """
 
 import os
@@ -9,6 +13,8 @@ import sys
 import re
 import argparse
 import configparser
+import requests
+import json
 from datetime import datetime as dt
 import praw
 from TwitterAPI import TwitterAPI, TwitterRequestError, TwitterConnectionError, TwitterPager
@@ -16,10 +22,24 @@ from TwitterAPI import TwitterAPI, TwitterRequestError, TwitterConnectionError, 
 
 __version__ = '1.0.0'
 __author__ = 'Corey Forman - @digitalsleuth'
-__date__ = '17 AUG 2022'
+__date__ = '29 AUG 2022'
 
 raw_wallet_regex = re.compile("0x.{40}")
 ens_wallet_regex = re.compile("\w+\.?\w+\.eth")
+
+class LoopringApi:
+    """Enpoints for Api queries"""
+    MAINNET = "https://api3.loopring.io"
+    TESTNET_UAT2 = "https://uat2.loopring.io"
+    TESTNET_UAT3 = "https://uat3.loopring.io"
+
+    """Query paths for Apis"""
+    ACCOUNT = 'https://api3.loopring.io/api/v3/account'
+    NFT_DATA = f"{MAINNET}/api/v3/nft/info/nftData"
+    NFT_HOLDERS = f"{MAINNET}/api/v3/nft/info/nftHolders"
+    NFT_NFTS = f"{MAINNET}/api/v3/nft/info/nfts"
+    USER_NFT_BALANCES = f"{MAINNET}/api/v3/user/nft/balances"
+
 
 class TreeNode:
     """Extracts required values from returned data object"""
@@ -65,15 +85,83 @@ class TreeNode:
             author_id.append(child.data['author_id'])
         return conv_id, child_id, text, author_id
 
+
+def parse_ids_from_url(nft_url):
+    """Parse an NFT Url for required ID data"""
+    ids = nft_url.rstrip('/').rsplit('/', 1)[-1]
+    id_list = ids.split('-')
+
+    for section in id_list:
+        if len(str(section)) < 5:
+            id_list.remove(section)
+
+    minter_id, token_address, nft_id = id_list
+    return minter_id, token_address, nft_id
+
+def query_nft_data(minter_id, token_address, nft_id, config):
+    """Used to query the NFT Data hash"""
+    load_config = configparser.ConfigParser()
+    load_config.read(config)
+    API_KEY = load_config['LOOPRING']['api_key']
+    HEADERS = {'X-API-KEY': API_KEY}
+    payload = {'minter': minter_id, 'tokenAddress': token_address, 'nftId': nft_id}
+    api_request = requests.get(LoopringApi.NFT_DATA, params=payload, headers=HEADERS)
+    api_response = json.loads(api_request.text)
+    nft_data = api_response["nftData"]
+
+    return nft_data
+
+def query_nft_holders(nft_data, config):
+    """Returns a json-formatted output of holders of the identified NFT"""
+    payload = {'nftData': nft_data, 'limit': 200}
+    load_config = configparser.ConfigParser()
+    load_config.read(config)
+    API_KEY = load_config['LOOPRING']['api_key']
+    HEADERS = {'X-API-KEY': API_KEY}
+    api_request = requests.get(LoopringApi.NFT_HOLDERS, params=payload, headers=HEADERS)
+    api_response = json.loads(api_request.text)
+
+    num_holders = api_response['totalNum']
+    nft_holders = api_response['nftHolders']
+    for holder in nft_holders:
+        holder_payload = {'accountId': holder['accountId']}
+        account_request = requests.get(LoopringApi.ACCOUNT, params=holder_payload)
+        account_response = json.loads(account_request.text)
+        holder['wallet'] = account_response['owner'].lower()
+
+    return nft_holders, num_holders
+
+def parse_nft_holders(args):
+    """Runs functions necessary for grabbing holder data and outputs parsed data"""
+    print(f"[+] Data will be output to {args['output']}")
+    print("[-] Parsing the ID values from the URL")
+    minter_id, token_address, nft_id = parse_ids_from_url(args['nft'])
+    print("[-] Getting the NftData hash from the API")
+    nft_data = query_nft_data(minter_id, token_address, nft_id, args['config'])
+    print("[-] Compiling and parsing a list of the NFT holders")
+    nft_holders, num_holders = query_nft_holders(nft_data, args['config'])
+    sorted_nft_holders = sorted(nft_holders, key=lambda amount: int(amount['amount']), reverse=True)
+
+    with open(args['output'], 'w') as output_file:
+        output_file.write(f'Total Holder Count: {num_holders}\n')
+        for holder in sorted_nft_holders:
+            if args['amount']:
+                output = f'{holder["wallet"]}, {holder["amount"]}'
+            else:
+                output = f'{holder["wallet"]}'
+            output_file.write(f'{output}\n')
+    output_file.close()
+    print("[+] Output complete")
+
 def parse_reddit_comments(url, subreddit, output, config):
     """Reads through all comments and grabs wallet addresses"""
 
     post_comments = []
     load_config = configparser.ConfigParser()
     load_config.read(config)
-    client_id = load_config['REDDIT']['client_id'].strip('"')
-    client_secret = load_config['REDDIT']['client_secret'].strip('"')
-    u_agent = load_config['GENERAL']['u_agent'].strip('"')
+    client_id = load_config['REDDIT']['client_id']
+    client_secret = load_config['REDDIT']['client_secret']
+    u_agent = load_config['GENERAL']['u_agent']
     try:
         if '' in {client_id, client_secret, u_agent}:
             print("[!] One of your API values is missing! "
@@ -102,10 +190,10 @@ def parse_tweet_comments(msgid, output, grab_wallet, grab_name, config):
 
     load_config = configparser.ConfigParser()
     load_config.read(config)
-    api_key = load_config['TWITTER']['api_key'].strip('"')
-    api_key_secret = load_config['TWITTER']['api_key_secret'].strip('"')
-    access_token = load_config['TWITTER']['access_token'].strip('"')
-    access_token_secret = load_config['TWITTER']['access_token_secret'].strip('"')
+    api_key = load_config['TWITTER']['api_key']
+    api_key_secret = load_config['TWITTER']['api_key_secret']
+    access_token = load_config['TWITTER']['access_token']
+    access_token_secret = load_config['TWITTER']['access_token_secret']
     try:
         if '' in {api_key, api_key_secret, access_token, access_token_secret}:
             print("[!] One of your API values is missing! "
@@ -204,10 +292,10 @@ def grab_names(author_ids, config):
     """Resolves Usernames from Author IDs"""
     load_config = configparser.ConfigParser()
     load_config.read(config)
-    api_key = load_config['TWITTER']['api_key'].strip('"')
-    api_key_secret = load_config['TWITTER']['api_key_secret'].strip('"')
-    access_token = load_config['TWITTER']['access_token'].strip('"')
-    access_token_secret = load_config['TWITTER']['access_token_secret'].strip('"')
+    api_key = load_config['TWITTER']['api_key']
+    api_key_secret = load_config['TWITTER']['api_key_secret']
+    access_token = load_config['TWITTER']['access_token']
+    access_token_secret = load_config['TWITTER']['access_token_secret']
     usernames = []
     twapi = TwitterAPI(api_key, api_key_secret, access_token, access_token_secret, api_version='2')
     for auth_id in author_ids:
@@ -219,7 +307,7 @@ def grab_names(author_ids, config):
 
 def main():
     """Parse all passed arguments"""
-    arg_parse = argparse.ArgumentParser(description=f"Python 3 Reddit Wallet Address parser"
+    arg_parse = argparse.ArgumentParser(description=f"Wallet Address Parser and NFT Query Tool"
                                                     f" v{__version__}")
     arg_parse.add_argument('-c', '--config', help='config file containing API keys', required=True)
     arg_parse.add_argument('-s', '--subreddit', help='subreddit to parse')
@@ -228,6 +316,8 @@ def main():
     arg_parse.add_argument('-n', '--name', help='grab usernames: Twitter Only', action='store_true')
     arg_parse.add_argument('-w', '--wallet', help='grab wallets: Twitter Only', action='store_true')
     arg_parse.add_argument('-o', '--output', help='choice in output file', required=True)
+    arg_parse.add_argument('--nft', help='URL from lexplorer.io or explorer.loopring.io')
+    arg_parse.add_argument('-a', '--amount', help='Used with --nft, show amounts of NFT\'s held', action='store_true')
     arg_parse.add_argument('-v', '--version', action='version', version=arg_parse.description)
 
     if len(sys.argv[1:]) == 0:
@@ -235,6 +325,7 @@ def main():
         arg_parse.exit()
 
     args = arg_parse.parse_args()
+    all_args = vars(args)
 
     if not args.config:
         print("[!] Config file containing API keys is required!")
@@ -246,6 +337,8 @@ def main():
         raise SystemExit(0)
     elif args.tweet:
         parse_tweet_comments(args.tweet, args.output, args.wallet, args.name, args.config)
+    elif args.nft:
+        parse_nft_holders(all_args)
     elif (len(sys.argv[1:]) > 0) and not (args.subreddit or args.tweet):
         print("Please choose a valid option.")
         raise SystemExit(0)
