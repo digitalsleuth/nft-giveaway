@@ -20,7 +20,7 @@ import praw
 from TwitterAPI import TwitterAPI, TwitterRequestError, TwitterConnectionError, TwitterPager
 
 
-__version__ = '1.0.1'
+__version__ = '1.1.0'
 __author__ = 'Corey Forman - @digitalsleuth'
 __date__ = '29 AUG 2022'
 
@@ -134,7 +134,6 @@ def query_nft_holders(nft_data, config):
 
 def parse_nft_holders(args):
     """Runs functions necessary for grabbing holder data and outputs parsed data"""
-    print(f"[+] Data will be output to {args['output']}")
     print("[-] Parsing the ID values from the URL")
     minter_id, token_address, nft_id = parse_ids_from_url(args['nft'])
     print("[-] Getting the NftData hash from the API")
@@ -143,20 +142,51 @@ def parse_nft_holders(args):
     nft_holders, num_holders = query_nft_holders(nft_data, args['config'])
     sorted_nft_holders = sorted(nft_holders, key=lambda amount: int(amount['amount']), reverse=True)
 
-    with open(args['output'], 'w') as output_file:
-        output_file.write(f'Total Holder Count: {num_holders}\n')
-        for holder in sorted_nft_holders:
-            if args['amount']:
-                output = f'{holder["wallet"]}, {holder["amount"]}'
-            else:
-                output = f'{holder["wallet"]}'
-            output_file.write(f'{output}\n')
-    output_file.close()
+    out_file = args['output']
+    if os.path.exists(out_file):
+        response = input(f'[WARNING] {out_file} already exists - overwrite? [Y/n] ')
+        while response not in ['Y', 'N', 'y', 'n', '']:
+            response = input(f'[WARNING] {output} already exists - overwrite? [Y/n] ')
+        if response in ['Y', 'y', '']:
+            print(f"[+] Data will be output to {out_file}")
+            with open(out_file, 'w') as output_file:
+                output_file.write(f'Total Holder Count: {num_holders}\n')
+                for holder in sorted_nft_holders:
+                    if args['amount']:
+                        output = f'{holder["wallet"]}, {holder["amount"]}'
+                    else:
+                        output = f'{holder["wallet"]}'
+                    output_file.write(f'{output}\n')
+            output_file.close()
+
+        elif response in ['N', 'n']:
+            out_file = f'{out_file}_{int(dt.timestamp(dt.now()))}'
+            print(f"[+] Data will be output to {out_file}")
+            with open(out_file, 'w') as output_file:
+                output_file.write(f'Total Holder Count: {num_holders}\n')
+                for holder in sorted_nft_holders:
+                    if args['amount']:
+                        output = f'{holder["wallet"]}, {holder["amount"]}'
+                    else:
+                        output = f'{holder["wallet"]}'
+                    output_file.write(f'{output}\n')
+            output_file.close()
+
+    else:
+        with open(out_file, 'a') as output_file:
+            print(f"[+] Data will be appended to {out_file}")
+            output_file.write(f'Total Holder Count: {num_holders}\n')
+            for holder in sorted_nft_holders:
+                if args['amount']:
+                    output = f'{holder["wallet"]}, {holder["amount"]}'
+                else:
+                    output = f'{holder["wallet"]}'
+                output_file.write(f'{output}\n')
+        output_file.close()
     print("[+] Output complete")
 
 def parse_reddit_comments(url, subreddit, output, config):
     """Reads through all comments and grabs wallet addresses"""
-
     post_comments = []
     load_config = configparser.ConfigParser()
     load_config.read(config)
@@ -188,7 +218,6 @@ def parse_reddit_comments(url, subreddit, output, config):
 
 def parse_tweet_comments(msgid, output, grab_wallet, grab_name, config):
     """Reads through all replies to the given Tweet and grabs wallet addresses"""
-
     load_config = configparser.ConfigParser()
     load_config.read(config)
     api_key = load_config['TWITTER']['api_key']
