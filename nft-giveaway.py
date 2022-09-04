@@ -20,9 +20,10 @@ import praw
 from TwitterAPI import TwitterAPI, TwitterRequestError, TwitterConnectionError, TwitterPager
 
 
-__version__ = '1.1.0'
+__version__ = '1.2.0'
 __author__ = 'Corey Forman - @digitalsleuth'
-__date__ = '29 AUG 2022'
+__date__ = '04 SEP 2022'
+__fmt__ = '%Y-%m-%d %H:%M:%S.%f'
 
 raw_wallet_regex = re.compile("0x.{40}")
 ens_wallet_regex = re.compile("\w+\.?\w+\.eth")
@@ -39,7 +40,8 @@ class LoopringApi:
     NFT_HOLDERS = f"{MAINNET}/api/v3/nft/info/nftHolders"
     NFT_NFTS = f"{MAINNET}/api/v3/nft/info/nfts"
     USER_NFT_BALANCES = f"{MAINNET}/api/v3/user/nft/balances"
-
+    USER_NFT_TRANSFERS = f"{MAINNET}/api/v3/user/nft/transfers"
+    USER_NFT_TRANSACTIONS = f"{MAINNET}/api/v3/user/nft/transactions"
 
 class TreeNode:
     """Extracts required values from returned data object"""
@@ -184,6 +186,52 @@ def parse_nft_holders(args):
                 output_file.write(f'{output}\n')
         output_file.close()
     print("[+] Output complete")
+
+def parse_user_nft_transactions(args):
+    """Grabs NFT transactions for receipt of coins"""
+
+    minter_id, token_address, nft_id = parse_ids_from_url(args['nft'])
+    nft_data = query_nft_data(minter_id, token_address, nft_id, args['config'])
+    load_config = configparser.ConfigParser()
+    load_config.read(args['config'])
+    API_KEY = load_config['LOOPRING']['api_key']
+    API_LIMIT = load_config['LOOPRING']['api_limit']
+
+    json_data = []
+    account_id = args['account']
+    offset = 0
+    tx_payload = {'nftData': nft_data, 'limit': API_LIMIT, 'accountId': account_id, 'types': 'transfer', 'offset': offset}
+    owner_payload = {'accountId': account_id}
+    HEADERS = {'X-API-KEY': API_KEY}
+    nft_tx = requests.get(LoopringApi.USER_NFT_TRANSACTIONS, params=tx_payload, headers=HEADERS)
+    owner_query = requests.get(LoopringApi.ACCOUNT, params=owner_payload, headers=HEADERS)
+    owner = json.loads(owner_query.text)['owner']
+    nft_response = json.loads(nft_tx.text)
+    total_num = nft_response['totalNum']
+    json_data.append(nft_response['transactions'])
+    print(f"[+] Total of {total_num} transaction(s) for account {account_id}")
+    while offset <= total_num:
+        offset += 50
+        tx_payload['offset'] = offset
+        nft_tx = requests.get(LoopringApi.USER_NFT_TRANSACTIONS, params=tx_payload, headers=HEADERS)
+        nft_response = json.loads(nft_tx.text)
+        json_data.append(nft_response['transactions'])
+    num_tx = 0
+    quantity = 0
+    with open(args['output'], 'a') as f:
+        f.write('id,nftTxType,senderAddress,receiverAddress,quantity,date_time,memo\n')
+        for list in range(0, len(json_data)):
+            for item in range(0, len(json_data[list])):
+                tx = json_data[list][item]
+                if tx['senderAddress'].casefold() == owner.casefold():
+                    pass
+                else:
+                    tx['timestamp'] = dt.utcfromtimestamp(float(tx['timestamp']) / 1000.0).strftime(__fmt__)
+                    tx['memo'] = tx['memo'].replace('\n', ' ').replace(', ', ' ')
+                    f.write(f"{tx['id']},{tx['nftTxType']},{tx['senderAddress']},{tx['receiverAddress']},{tx['amount']},{tx['timestamp']},{tx['memo']}\n")
+                    num_tx += 1
+                    quantity += int(tx['amount'])
+    print(f"[+] Total of {num_tx} NFT TRANSFER transaction(s) ({quantity} NFT's) to {account_id}-{owner}")
 
 def parse_reddit_comments(url, subreddit, output, config):
     """Reads through all comments and grabs wallet addresses"""
@@ -341,13 +389,14 @@ def main():
                                                     f" v{__version__}")
     arg_parse.add_argument('-c', '--config', help='config file containing API keys', required=True)
     arg_parse.add_argument('-s', '--subreddit', help='subreddit to parse')
-    arg_parse.add_argument('-t', '--tweet', help='tweet 19-digit ID')
     arg_parse.add_argument('-u', '--url', help='short URL for the reddit thread')
+    arg_parse.add_argument('-t', '--tweet', help='tweet 19-digit ID')
     arg_parse.add_argument('-n', '--name', help='grab usernames: Twitter Only', action='store_true')
     arg_parse.add_argument('-w', '--wallet', help='grab wallets: Twitter Only', action='store_true')
-    arg_parse.add_argument('-o', '--output', help='choice in output file', required=True)
     arg_parse.add_argument('--nft', help='URL from lexplorer.io or explorer.loopring.io')
+    arg_parse.add_argument('--account', help='Grab NFT transactions from an account ID - requires --nft')
     arg_parse.add_argument('-a', '--amount', help='Used with --nft, show amounts of NFT\'s held', action='store_true')
+    arg_parse.add_argument('-o', '--output', help='choice in output file', required=True)
     arg_parse.add_argument('-v', '--version', action='version', version=arg_parse.description)
 
     if len(sys.argv[1:]) == 0:
@@ -367,8 +416,10 @@ def main():
         raise SystemExit(0)
     elif args.tweet:
         parse_tweet_comments(args.tweet, args.output, args.wallet, args.name, args.config)
-    elif args.nft:
+    elif args.nft and not args.account:
         parse_nft_holders(all_args)
+    elif args.nft and args.account:
+        parse_user_nft_transactions(all_args)
     elif (len(sys.argv[1:]) > 0) and not (args.subreddit or args.tweet):
         print("Please choose a valid option.")
         raise SystemExit(0)
