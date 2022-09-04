@@ -20,7 +20,7 @@ import praw
 from TwitterAPI import TwitterAPI, TwitterRequestError, TwitterConnectionError, TwitterPager
 
 
-__version__ = '1.2.0'
+__version__ = '1.2.1'
 __author__ = 'Corey Forman - @digitalsleuth'
 __date__ = '04 SEP 2022'
 __fmt__ = '%Y-%m-%d %H:%M:%S.%f'
@@ -219,7 +219,7 @@ def parse_user_nft_transactions(args):
     num_tx = 0
     quantity = 0
     with open(args['output'], 'a') as f:
-        f.write('id,nftTxType,senderAddress,receiverAddress,quantity,date_time,memo\n')
+        f.write('TX_ID,NFT_TX_TYPE,SENDER_ADDRESS,RECEIVER_ADDRESS,AMOUNT,DATE_TIME,MEMO\n')
         for list in range(0, len(json_data)):
             for item in range(0, len(json_data[list])):
                 tx = json_data[list][item]
