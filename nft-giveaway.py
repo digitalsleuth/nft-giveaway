@@ -13,19 +13,19 @@ import sys
 import re
 import argparse
 import configparser
-import requests
 import json
 from datetime import datetime as dt
+import requests
 import praw
 from TwitterAPI import TwitterAPI, TwitterRequestError, TwitterConnectionError, TwitterPager
 
 
-__version__ = '1.2.1'
+__version__ = '2.0.0'
 __author__ = 'Corey Forman - @digitalsleuth'
-__date__ = '04 SEP 2022'
+__date__ = '05 SEP 2022'
 __fmt__ = '%Y-%m-%d %H:%M:%S.%f'
 
-raw_wallet_regex = re.compile("0x.{40}")
+raw_wallet_regex = re.compile("0x[A-Za-z0-9]{40}")
 ens_wallet_regex = re.compile("\w+\.?\w+\.eth")
 
 class LoopringApi:
@@ -128,7 +128,7 @@ def query_nft_holders(nft_data, config):
     nft_holders = api_response['nftHolders']
     for holder in nft_holders:
         holder_payload = {'accountId': holder['accountId']}
-        account_request = requests.get(LoopringApi.ACCOUNT, params=holder_payload)
+        account_request = requests.get(LoopringApi.ACCOUNT, params=holder_payload, headers=HEADERS)
         account_response = json.loads(account_request.text)
         holder['wallet'] = account_response['owner'].lower()
 
@@ -142,19 +142,24 @@ def parse_nft_holders(args):
     nft_data = query_nft_data(minter_id, token_address, nft_id, args['config'])
     print("[-] Compiling and parsing a list of the NFT holders")
     nft_holders, num_holders = query_nft_holders(nft_data, args['config'])
-    sorted_nft_holders = sorted(nft_holders, key=lambda amount: int(amount['amount']), reverse=True)
+    if args['quantity']:
+        sorted_nft_holders = sorted(nft_holders,
+                                    key=lambda amount: int(amount['amount']),
+                                    reverse=True)
+    else:
+        sorted_nft_holders = sorted(nft_holders, key=lambda wallet: wallet['wallet'])
 
     out_file = args['output']
     if os.path.exists(out_file):
         response = input(f'[WARNING] {out_file} already exists - overwrite? [Y/n] ')
         while response not in ['Y', 'N', 'y', 'n', '']:
-            response = input(f'[WARNING] {output} already exists - overwrite? [Y/n] ')
+            response = input(f'[WARNING] {out_file} already exists - overwrite? [Y/n] ')
         if response in ['Y', 'y', '']:
             print(f"[+] Data will be output to {out_file}")
             with open(out_file, 'w') as output_file:
                 output_file.write(f'Total Holder Count: {num_holders}\n')
                 for holder in sorted_nft_holders:
-                    if args['amount']:
+                    if args['quantity']:
                         output = f'{holder["wallet"]}, {holder["amount"]}'
                     else:
                         output = f'{holder["wallet"]}'
@@ -167,7 +172,7 @@ def parse_nft_holders(args):
             with open(out_file, 'w') as output_file:
                 output_file.write(f'Total Holder Count: {num_holders}\n')
                 for holder in sorted_nft_holders:
-                    if args['amount']:
+                    if args['quantity']:
                         output = f'{holder["wallet"]}, {holder["amount"]}'
                     else:
                         output = f'{holder["wallet"]}'
@@ -176,10 +181,10 @@ def parse_nft_holders(args):
 
     else:
         with open(out_file, 'a') as output_file:
-            print(f"[+] Data will be appended to {out_file}")
+            print(f"[+] Data will be output to {out_file}")
             output_file.write(f'Total Holder Count: {num_holders}\n')
             for holder in sorted_nft_holders:
-                if args['amount']:
+                if args['quantity']:
                     output = f'{holder["wallet"]}, {holder["amount"]}'
                 else:
                     output = f'{holder["wallet"]}'
@@ -200,7 +205,13 @@ def parse_user_nft_transactions(args):
     json_data = []
     account_id = args['account']
     offset = 0
-    tx_payload = {'nftData': nft_data, 'limit': API_LIMIT, 'accountId': account_id, 'types': 'transfer', 'offset': offset}
+    tx_payload = {
+        'nftData': nft_data,
+        'limit': API_LIMIT,
+        'accountId': account_id,
+        'types': 'transfer',
+        'offset': offset
+    }
     owner_payload = {'accountId': account_id}
     HEADERS = {'X-API-KEY': API_KEY}
     nft_tx = requests.get(LoopringApi.USER_NFT_TRANSACTIONS, params=tx_payload, headers=HEADERS)
@@ -218,20 +229,25 @@ def parse_user_nft_transactions(args):
         json_data.append(nft_response['transactions'])
     num_tx = 0
     quantity = 0
-    with open(args['output'], 'a') as f:
-        f.write('TX_ID,NFT_TX_TYPE,SENDER_ADDRESS,RECEIVER_ADDRESS,AMOUNT,DATE_TIME,MEMO\n')
-        for list in range(0, len(json_data)):
-            for item in range(0, len(json_data[list])):
-                tx = json_data[list][item]
+    with open(args['output'], 'a') as out_file:
+        out_file.write('TX_ID,NFT_TX_TYPE,SENDER_ADDRESS,RECEIVER_ADDRESS,AMOUNT,DATE_TIME,MEMO\n')
+        for tx_list, _ in enumerate(json_data):
+            for item in range(0, len(json_data[tx_list])):
+                tx = json_data[tx_list][item]
                 if tx['senderAddress'].casefold() == owner.casefold():
                     pass
                 else:
-                    tx['timestamp'] = dt.utcfromtimestamp(float(tx['timestamp']) / 1000.0).strftime(__fmt__)
+                    tx['timestamp'] = dt.utcfromtimestamp(float(tx['timestamp']) /
+                                                          1000.0).strftime(__fmt__)
                     tx['memo'] = tx['memo'].replace('\n', ' ').replace(', ', ' ')
-                    f.write(f"{tx['id']},{tx['nftTxType']},{tx['senderAddress']},{tx['receiverAddress']},{tx['amount']},{tx['timestamp']},{tx['memo']}\n")
+                    out_file.write(f"{tx['id']},{tx['nftTxType']},{tx['senderAddress']}," \
+                            f"{tx['receiverAddress']},{tx['amount']},{tx['timestamp']}," \
+                            f"{tx['memo']}\n")
                     num_tx += 1
                     quantity += int(tx['amount'])
-    print(f"[+] Total of {num_tx} NFT TRANSFER transaction(s) ({quantity} NFT's) to {account_id}-{owner}")
+    print(f"[+] Total of {num_tx} NFT TRANSFER transaction(s)" \
+          f" ({quantity} NFT's) to {account_id}-{owner}")
+    out_file.close()
 
 def parse_reddit_comments(url, subreddit, output, config):
     """Reads through all comments and grabs wallet addresses"""
@@ -249,6 +265,7 @@ def parse_reddit_comments(url, subreddit, output, config):
     except:
         pass
     post = f'https://www.reddit.com/r/{subreddit}/comments/{url}'
+    print(f"[-] Parsing {post} for wallet addresses, this will take a moment...")
     reddit_ro = praw.Reddit(client_id=client_id,
                             client_secret=client_secret,
                             user_agent=u_agent)
@@ -258,11 +275,13 @@ def parse_reddit_comments(url, subreddit, output, config):
         post_comments.append(comment.body)
 
     de_dup = grab_wallets(post_comments)
-
+    total = 0
     with open(output, 'w') as output_file:
         for each_line in de_dup:
             output_file.write(f'{each_line}\n')
+            total += 1
     output_file.close()
+    print(f"[+] Total of {total} addresses scraped - results saved in {output}")
 
 def parse_tweet_comments(msgid, output, grab_wallet, grab_name, config):
     """Reads through all replies to the given Tweet and grabs wallet addresses"""
@@ -280,7 +299,12 @@ def parse_tweet_comments(msgid, output, grab_wallet, grab_name, config):
     except:
         pass
     try:
-        replies = []
+        if grab_wallet:
+            search = "wallet addresses"
+        elif grab_name:
+            search = "user names"
+        print(f"[-] Parsing Twitter message {msgid} for {search} - this will take a moment...")
+
         twapi = TwitterAPI(api_key,
                            api_key_secret,
                            access_token,
@@ -291,13 +315,15 @@ def parse_tweet_comments(msgid, output, grab_wallet, grab_name, config):
         #  Following code block source:
         #  https://towardsdatascience.com/mining-replies-to-tweets-a-walkthrough-9a936602c4d6
         root_ent = twapi.request(f'tweets/:{convo_id}',
-                                 {'tweet.fields': 'author_id,conversation_id,created_at,in_reply_to_user_id'
+                                 {'tweet.fields':
+                                  'author_id,conversation_id,created_at,in_reply_to_user_id'
                                  })
         for entry in root_ent:
             root = TreeNode(entry)
         pager = TwitterPager(twapi, 'tweets/search/recent',
                              {'query': f'conversation_id:{convo_id}',
-                              'tweet.fields': 'author_id,conversation_id,created_at,in_reply_to_user_id'
+                              'tweet.fields':
+                              'author_id,conversation_id,created_at,in_reply_to_user_id'
                              })
         orphans = []
         for each_item in pager.get_iterator(wait=1):
@@ -329,6 +355,7 @@ def parse_tweet_comments(msgid, output, grab_wallet, grab_name, config):
     else:
         de_dup = grab_wallets(replies)
 
+    total = 0
     if os.path.exists(output):
         response = input(f'[WARNING] {output} already exists - overwrite? [Y/n] ')
         while response not in ['Y', 'N', 'y', 'n', '']:
@@ -337,18 +364,22 @@ def parse_tweet_comments(msgid, output, grab_wallet, grab_name, config):
             with open(output, 'w') as output_file:
                 for each_line in de_dup:
                     output_file.write(f'{each_line}\n')
+                    total += 1
             output_file.close()
         elif response in ['N', 'n']:
             output = f'{output}_{int(dt.timestamp(dt.now()))}'
             with open(output, 'w') as output_file:
                 for each_line in de_dup:
                     output_file.write(f'{each_line}\n')
+                    total += 1
             output_file.close()
     else:
         with open(output, 'a') as output_file:
             for each_line in de_dup:
                 output_file.write(f'{each_line}\n')
+                total += 1
         output_file.close()
+    print(f"[+] Total of {total} {search} scraped - results saved in {output}")
 
 def grab_wallets(replies):
     """Grabs Wallet Addresses from Replies"""
@@ -387,17 +418,45 @@ def main():
     """Parse all passed arguments"""
     arg_parse = argparse.ArgumentParser(description=f"Wallet Address Parser and NFT Query Tool"
                                                     f" v{__version__}")
-    arg_parse.add_argument('-c', '--config', help='config file containing API keys', required=True)
-    arg_parse.add_argument('-s', '--subreddit', help='subreddit to parse')
-    arg_parse.add_argument('-u', '--url', help='short URL for the reddit thread')
-    arg_parse.add_argument('-t', '--tweet', help='tweet 19-digit ID')
-    arg_parse.add_argument('-n', '--name', help='grab usernames: Twitter Only', action='store_true')
-    arg_parse.add_argument('-w', '--wallet', help='grab wallets: Twitter Only', action='store_true')
-    arg_parse.add_argument('--nft', help='URL from lexplorer.io or explorer.loopring.io')
-    arg_parse.add_argument('--account', help='Grab NFT transactions from an account ID - requires --nft')
-    arg_parse.add_argument('-a', '--amount', help='Used with --nft, show amounts of NFT\'s held', action='store_true')
-    arg_parse.add_argument('-o', '--output', help='choice in output file', required=True)
     arg_parse.add_argument('-v', '--version', action='version', version=arg_parse.description)
+    subparsers = arg_parse.add_subparsers(title="categories",
+                                          metavar='',
+                                          prog='nft-giveaway',
+                                          dest='command')
+
+    reddit_parser = subparsers.add_parser('reddit', help='Interact with Reddit')
+    reddit = reddit_parser.add_argument_group('options')
+    reddit_parser.add_argument('-s', '--subreddit', help='subreddit to parse', required=True)
+    reddit_parser.add_argument('-u', '--url', help='short URL for the reddit thread',
+                               required=True)
+    reddit_parser.add_argument('-c', '--config', help='config file containing API keys',
+                               required=True)
+    reddit_parser.add_argument('-o', '--output', help='choose output file', required=True)
+
+    twitter_parser = subparsers.add_parser('twitter', help='Interact with Twitter')
+    twitter = twitter_parser.add_argument_group('options')
+    twitter_group = twitter.add_mutually_exclusive_group(required=True)
+    twitter_group.add_argument('-n', '--name', help='grab usernames',
+                               action='store_true', default=False)
+    twitter_group.add_argument('-w', '--wallet', help='grab wallet addresses',
+                               action='store_true', default=False)
+    twitter_parser.add_argument('-t', '--tweet', help='tweet 19-digit ID', required=True)
+    twitter_parser.add_argument('-c', '--config', help='config file containing API keys',
+                                required=True)
+    twitter_parser.add_argument('-o', '--output', help='choose output file', required=True)
+
+    loopring_parser = subparsers.add_parser('loopring', help='Interact with Loopring NFT\'s')
+    loopring = loopring_parser.add_argument_group('options')
+    loopring_parser.add_argument('-q', '--quantity',
+                                 help='Used with --nft, shows quantity of NFT\'s held',
+                                 action='store_true', default=False)
+    loopring_parser.add_argument('-i', '--account',
+                                 help='Grab NFT transactions from an account ID', default=False)
+    loopring_parser.add_argument('--nft', help='URL from lexplorer.io or explorer.loopring.io',
+                                 required=True)
+    loopring_parser.add_argument('-c', '--config', help='config file containing API keys',
+                                 required=True)
+    loopring_parser.add_argument('-o', '--output', help='choose output file', required=True)
 
     if len(sys.argv[1:]) == 0:
         arg_parse.print_help()
@@ -409,20 +468,20 @@ def main():
     if not args.config:
         print("[!] Config file containing API keys is required!")
         raise SystemExit(0)
-    if args.subreddit:
-        parse_reddit_comments(args.url, args.subreddit, args.output, args.config)
-    elif args.subreddit and not args.url:
-        print("Parsing Reddit Thread requires the short URL for the thread")
-        raise SystemExit(0)
-    elif args.tweet:
-        parse_tweet_comments(args.tweet, args.output, args.wallet, args.name, args.config)
-    elif args.nft and not args.account:
-        parse_nft_holders(all_args)
-    elif args.nft and args.account:
-        parse_user_nft_transactions(all_args)
-    elif (len(sys.argv[1:]) > 0) and not (args.subreddit or args.tweet):
-        print("Please choose a valid option.")
-        raise SystemExit(0)
+    if args.command == 'reddit':
+        if args.subreddit:
+            parse_reddit_comments(args.url, args.subreddit, args.output, args.config)
+        elif args.subreddit and not args.url:
+            print("Parsing Reddit Thread requires the short URL for the thread")
+            raise SystemExit(0)
+    if args.command == 'twitter':
+        if args.tweet:
+            parse_tweet_comments(args.tweet, args.output, args.wallet, args.name, args.config)
+    if args.command == 'loopring':
+        if args.nft and not args.account:
+            parse_nft_holders(all_args)
+        elif args.nft and args.account:
+            parse_user_nft_transactions(all_args)
 
 if __name__ == '__main__':
     main()
